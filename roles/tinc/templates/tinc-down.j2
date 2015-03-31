@@ -1,2 +1,4 @@
 #!/bin/sh
-ifconfig $INTERFACE down
+/sbin/route del -net 224.0.0.0 netmask 240.0.0.0 dev vmbr0
+/sbin/brctl delif vmbr0 {{ vpn_name }}
+/sbin/ifconfig {{ vpn_name }} down

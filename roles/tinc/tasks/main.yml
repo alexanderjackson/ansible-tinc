@@ -6,16 +6,12 @@
     recurse=yes
     state=directory
 
-- name: install custom fact module for IP address
-  template: >
-    src=tinc_facts.sh.j2
-    dest=/etc/ansible/facts.d/tinc_facts.fact
-    mode=0755
+- name: open ufw firewall for "ssh 655 8006" if ufw exists
+  shell: >
+    if which ufw >/dev/null ; then for i in ssh 655 8006 ; do ufw allow $i ; done ; else echo ufw not installed ; fi
 
 - name: reload ansible_local
   setup: filter=ansible_local
-
-- debug: msg="{{ ansible_local.tinc_facts.vpn_ip }}"
 
 - name: install tinc
   apt: >
@@ -23,6 +19,10 @@
     state=present
     update_cache=yes
     cache_valid_time=3600
+
+- name: delete current tinc config
+  command: >
+    rm -rf /etc/tinc
 
 - name: ensure tinc vpn name directory exists
   file: >
@@ -35,28 +35,20 @@
     src=tinc.conf.j2
     dest=/etc/tinc/{{ vpn_name }}/tinc.conf
 
+- name: get public ip
+  shell: wget -qO- http://ipecho.net/plain ; echo
+  register: host_ip
+
 - name: ensure tinc address is properly set in tinc host file
   lineinfile: >
     dest=/etc/tinc/{{ vpn_name }}/hosts/{{ ansible_hostname }}
-    line="Address = {{ ansible_eth0.ipv4.address }}"
+    line="Address = {{ host_ip.stdout }}"
     create=yes
-  notify:
-    - restart tinc
-
-- name: ensure subnet ip address is properly set in tinc host file
-  lineinfile: >
-    dest=/etc/tinc/{{ vpn_name }}/hosts/{{ ansible_hostname }}
-    line="Subnet = {{ ansible_local.tinc_facts.vpn_ip }}/32"
-    create=yes
-  notify:
-    - restart tinc
 
 - name: create /etc/tinc/nets.boot file from template
   template: >
     src=nets.boot.j2
     dest=/etc/tinc/nets.boot
-  notify:
-    - restart tinc
 
 - name: create tinc private key
   shell: tincd -n {{ vpn_name }} -K4096
@@ -74,16 +66,12 @@
     src=tinc-down.j2
     dest=/etc/tinc/{{ vpn_name }}/tinc-down
     mode=0755
-  notify:
-    - restart tinc
 
 - name: fetch tinc hosts file after private key creation
   fetch: >
     src=/etc/tinc/{{ vpn_name }}/hosts/{{ ansible_hostname }}
     dest=fetch/{{ ansible_hostname }}
     flat=yes
-  notify:
-    - restart tinc
 
 - name: ensure the fetched tinc hosts file are place on each server
   file: >
@@ -91,19 +79,35 @@
     dest=/etc/tinc/{{vpn_name }}/hosts/{{ item }}
   with_fileglob:
     - fetch/*
-  notify:
-    - restart tinc
 
-# so this will unenessearily copy the hosts file but still should be ok
 - name: sync the fetched hosts files on each host
   synchronize: >
     src=fetch/
     dest=/etc/tinc/{{ vpn_name }}/hosts/
-  notify:
-    - restart tinc
 
-# finally ensure tinc is actually running
-- name: ensure tinc is running
-  service: >
-    name=tinc
-    state=started
+- replace:
+    dest=/etc/init.d/tinc
+    regexp='^# Default-Stop.*'
+    replace='# Default-Stop:'
+    backup=yes
+
+- name: tinc remove
+  command: >
+    insserv -r tinc
+
+- name: tinc add
+  command: >
+    insserv -f tinc
+
+- name: renice tincd
+  cron: >
+    name="renice tincd" job="renice -n -10 $(pidof tincd) > /dev/null 2>&1"
+
+- name: restart tinc
+  command: >
+    service tinc restart
+
+- name: ensure hosts file is the up to date
+  template: >
+    src=hosts.j2
+    dest=/etc/hosts

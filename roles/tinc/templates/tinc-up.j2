@@ -1,2 +1,11 @@
 #!/bin/sh
-ifconfig $INTERFACE {{ ansible_local.tinc_facts.vpn_ip }} netmask 255.255.255.0
+
+# Attach the {{ vpn_name }} interface to $BRIDGEIF
+/sbin/ifconfig {{ vpn_name }} up
+/sbin/brctl addif vmbr0 {{ vpn_name }}
+
+# Set a multicast route over $BRIDGEIF
+/sbin/route add -net 224.0.0.0 netmask 240.0.0.0 dev vmbr0
+
+# To limit the chance of Corosync Totem re-transmission issues:
+echo 0 > /sys/devices/virtual/net/vmbr0/bridge/multicast_snooping
